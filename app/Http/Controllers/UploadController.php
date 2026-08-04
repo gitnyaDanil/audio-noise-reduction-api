@@ -2,7 +2,7 @@
 
 namespace App\Http\Controllers;
 
-use App\Jobs\ProcessDolbyUploadJob;
+use App\Jobs\ProcessNoiseReductionJob;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Str;
@@ -16,7 +16,7 @@ class UploadController extends Controller
                 'required',
                 'file',
                 'mimes:mp4,mov,webm,avi',
-                'max:102400',
+                'max:'.config('noise_reduction.max_upload_kb'),
             ],
         ]);
 
@@ -25,13 +25,16 @@ class UploadController extends Controller
 
         $jobId = (string) Str::uuid();
         Cache::put("upload_job:{$jobId}", [
+            'job_id' => $jobId,
             'status' => 'pending',
             'progress' => 0,
             'message' => 'Queued for processing',
-            'original_path' => $path,
-        ], 3600);
+            'original_filename' => $file->getClientOriginalName(),
+            'created_at' => now()->toIso8601String(),
+            'updated_at' => now()->toIso8601String(),
+        ], config('noise_reduction.status_ttl'));
 
-        ProcessDolbyUploadJob::dispatch($path, $jobId);
+        ProcessNoiseReductionJob::dispatch($path, $jobId);
 
         return response()->json([
             'message' => 'File uploaded and queued',
@@ -54,4 +57,3 @@ class UploadController extends Controller
         return response()->json($job, 200);
     }
 }
-

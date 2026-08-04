@@ -28,11 +28,6 @@ Thumbs.db
 .env.*
 !.env.example
 
-# Laravel
-/vendor/
-/node_modules/
-...
-
 # Media files
 *.mp4
 *.mp3

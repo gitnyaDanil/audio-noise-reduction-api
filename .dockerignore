@@ -1,0 +1,14 @@
+.git
+.github
+.env
+node_modules
+vendor
+storage/app/private/*
+storage/app/public/*
+storage/framework/cache/*
+storage/framework/sessions/*
+storage/framework/views/*
+storage/logs/*
+*.mp3
+*.mp4
+*.wav

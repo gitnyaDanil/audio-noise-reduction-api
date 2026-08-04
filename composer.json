@@ -1,9 +1,9 @@
 {
     "$schema": "https://getcomposer.org/schema.json",
-    "name": "laravel/laravel",
+    "name": "gitnyadanil/audio-noise-reduction-api",
     "type": "project",
-    "description": "The skeleton application for the Laravel framework.",
-    "keywords": ["laravel", "framework"],
+    "description": "Asynchronous DeepFilterNet3 speech-enhancement API for short-form video.",
+    "keywords": ["speech-enhancement", "deepfilternet", "laravel", "docker", "pytorch"],
     "license": "MIT",
     "require": {
         "php": "^8.3",

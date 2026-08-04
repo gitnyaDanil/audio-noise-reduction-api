@@ -1,114 +1,96 @@
-# 🎧 AI Audio Noise Reduction API
+# AI Audio Noise Reduction API
 
-An API-driven background noise reduction service for short-form video content, powered by **DeepFilterNet3** — a state-of-the-art neural network for speech enhancement. Built with Laravel 11, fully containerized with Docker, and designed around an async queue architecture.
+An asynchronous speech-enhancement API for short-form video. The service extracts a video's audio track, enhances speech with the pretrained DeepFilterNet3 model, and returns a new MP4 file with the enhanced audio.
 
-> Upload a video → get back a clean, noise-free version. No third-party AI API needed — all processing runs locally inside the container.
+This project demonstrates model integration and serving rather than model training. DeepFilterNet is an open-source full-band speech-enhancement framework: <https://github.com/Rikorose/DeepFilterNet>.
 
----
+## What it demonstrates
 
-## ✨ Features
+- A queue-based API that keeps expensive inference outside the HTTP request lifecycle
+- A reproducible CPU inference environment using pinned Python, PyTorch, and DeepFilterNet versions
+- A real video-to-audio-to-video media pipeline built with FFmpeg
+- Explicit job states, progress reporting, failure logging, and graceful fallback
+- Docker Compose services for the API, queue worker, and MySQL
+- Feature and unit tests executed by GitHub Actions
 
-- **Async processing** — uploads return immediately with a job ID; processing happens in the background
-- **AI-powered** — uses DeepFilterNet3 (PyTorch 2.2.0) for neural network speech enhancement
-- **Queue architecture** — database-backed job queue with real-time status polling
-- **Fallback handling** — if AI processing fails, original file is returned gracefully
-- **Fully containerized** — runs entirely inside Docker via Laravel Sail, no manual dependency setup
+## Architecture
 
----
+![System architecture](docs/diagrams/system-architecture.png)
 
-## 🛠 Tech Stack
+The Laravel application handles uploads and status queries while a separate queue worker owns FFmpeg and model inference. See the [architecture documentation](docs/architecture.md) for deployment, lifecycle, and editable Excalidraw sources. The original [draw.io source](docs/diagrams/audio-noise-reduction-api.drawio) also remains available.
+
+## Processing pipeline
+
+![Media-processing pipeline](docs/diagrams/media-processing-pipeline.png)
+
+If enhancement fails, the worker logs the internal error and exposes the original upload with a `fallback` status. Internal command output is not returned to API clients.
+
+## Technology
 
 | Layer | Technology |
 |---|---|
-| Backend | Laravel 11 / PHP 8.5 |
-| Container | Docker via Laravel Sail |
-| Queue | Laravel Database Queue |
-| AI Model | DeepFilterNet3 0.5.6 |
-| Deep Learning | PyTorch 2.2.0 |
-| Audio Processing | FFmpeg 6.1.1 |
-| Status Tracking | Laravel Cache |
+| API | Laravel 13, PHP 8.5 |
+| Queue and status storage | Laravel database queue and cache |
+| Model | DeepFilterNet3 via DeepFilterNet 0.5.6 |
+| Inference runtime | Python 3.11, PyTorch 2.2 CPU |
+| Media processing | FFmpeg |
+| Infrastructure | Docker Compose, MySQL |
+| Verification | PHPUnit, GitHub Actions |
 
----
+## Run locally
 
-## 🏗 Architecture
+### Requirements
 
-The system follows a **queue-based async processing pattern** — the HTTP layer only handles file intake and status reporting, while all heavy AI processing is offloaded to background workers.
+- Docker Desktop or Docker Engine with Compose
+- Git Bash, WSL, Linux, or macOS for the commands below
 
-```
-Client
-  │
-  ▼
-POST /api/upload
-  │
-  ▼
-UploadController → validates file → stores file → dispatches job → returns 202 + job_id
-  │
-  ▼
-Queue Worker → runs DeepFilterNet3 → writes result to cache
-  │
-  ▼
-GET /api/upload/status/{job_id} ← Client polls until completed
-  │
-  ▼
-Client downloads cleaned video from download_url
-```
-
-### Job Status Values
-
-| Status | Meaning |
-|---|---|
-| `pending` | Job is queued, not yet picked up |
-| `processing` | Worker is actively running AI processing |
-| `completed` | Done — `download_url` is available |
-| `fallback` | AI failed, original file returned as output |
-| `failed` | Both processing and fallback failed |
-
----
-
-## 🚀 Getting Started
-
-### Prerequisites
-- Docker & Docker Compose
-
-### Run the project
+### Setup
 
 ```bash
-# 1. Clone the repo
 git clone https://github.com/gitnyaDanil/audio-noise-reduction-api.git
 cd audio-noise-reduction-api
 
-# 2. Copy environment file
+# Install Laravel Sail on the host-mounted project directory.
+docker run --rm -v "$PWD:/app" -w /app composer:2 \
+  composer install --ignore-platform-reqs --no-interaction
+
 cp .env.example .env
 
-# 3. Start containers
+./vendor/bin/sail build
+docker compose run --rm laravel.test php artisan key:generate
 ./vendor/bin/sail up -d
 
-# 4. Clear config and cache
-./vendor/bin/sail artisan config:clear
-./vendor/bin/sail artisan cache:clear
-
-# 5. Start the queue worker (keep this running)
-./vendor/bin/sail artisan queue:work --tries=3 --sleep=3 --timeout=180
+./vendor/bin/sail artisan migrate --force
+./vendor/bin/sail artisan storage:link
 ```
 
----
+The Compose stack starts the HTTP application, the queue worker, and MySQL. The first image build is slow because it installs the CPU inference environment and model dependencies.
 
-## 📡 API Reference
+Verify the application:
 
-### Upload a Video File
-
+```bash
+curl http://localhost:8080/up
+docker compose ps
 ```
+
+## API
+
+### Upload a video
+
+```http
 POST /api/upload
 Content-Type: multipart/form-data
 ```
 
-**Accepted formats:** MP4, MOV, WEBM, AVI — max 100MB
+Accepted extensions: `mp4`, `mov`, `webm`, and `avi`. Maximum size: 100 MB by default.
 
 ```bash
-curl -X POST http://localhost:8080/api/upload -F "file=@video.mp4"
+curl -X POST http://localhost:8080/api/upload \
+  -F "file=@sample.mp4"
 ```
 
-**Response (202 Accepted):**
+Response:
+
 ```json
 {
   "message": "File uploaded and queued",
@@ -117,59 +99,97 @@ curl -X POST http://localhost:8080/api/upload -F "file=@video.mp4"
 }
 ```
 
----
-
-### Poll Job Status
-
-```
-GET /api/upload/status/{job_id}
-```
+### Check processing status
 
 ```bash
 curl http://localhost:8080/api/upload/status/06b7ecf6-5d93-4348-81ce-1335cc539bb7
 ```
 
-**Response (completed):**
+Completed response:
+
 ```json
 {
+  "job_id": "06b7ecf6-5d93-4348-81ce-1335cc539bb7",
   "status": "completed",
   "progress": 100,
-  "message": "AI noise reduction complete",
-  "original_path": "uploads/abc123.mp4",
-  "processed_path": "processed/06b7ecf6_abc123.mp4",
-  "download_url": "http://localhost/storage/processed/06b7ecf6_abc123.mp4"
+  "message": "Noise reduction complete",
+  "created_at": "2026-08-01T08:00:00+00:00",
+  "updated_at": "2026-08-01T08:01:24+00:00",
+  "download_url": "http://localhost:8080/storage/processed/06b7ecf6-5d93-4348-81ce-1335cc539bb7.mp4"
 }
 ```
 
----
+### Job states
 
-## ⚠️ Known Limitations
+| Status | Meaning |
+|---|---|
+| `pending` | Accepted and waiting for a worker |
+| `processing` | Audio extraction or inference is running |
+| `completed` | Enhanced MP4 is ready |
+| `fallback` | Enhancement failed; original upload is available |
+| `failed` | Enhancement and fallback both failed |
 
-- DeepFilterNet3 is optimized for **speech enhancement** — best results on voice + background noise. Music or non-speech audio may sound unnatural after processing.
-- Job status is cached with a **1-hour TTL** — the status endpoint returns 404 after expiry.
-- **No file cleanup** — processed files are stored indefinitely on the public disk.
-- **Single queue worker** by default — concurrent uploads are processed sequentially.
+Status records expire after 24 hours by default.
 
----
+## Tests
 
-## 🔮 Future Improvements
+The automated tests cover upload validation, job dispatch, status lookup, successful processing orchestration, and fallback behavior. External FFmpeg and DeepFilterNet execution is isolated behind `AudioNoiseReducer`, so queue behavior can be tested without loading the model.
 
-- [ ] Frontend upload UI with real-time progress bar
-- [ ] Redis queue driver for higher throughput
-- [ ] S3 storage for scalability
-- [ ] Laravel Horizon for queue monitoring
-- [ ] Webhook support (callback URL on job completion)
-- [ ] Batch processing (multiple files per request)
-- [ ] GPU support via CUDA for faster processing
-- [ ] Scheduled file cleanup (auto-delete after 24h)
+```bash
+./vendor/bin/sail test
+```
 
----
+GitHub Actions runs the PHP tests on every push and pull request.
 
-## 📁 Key Files
+## Product and design documentation
+
+- [Product requirements document](docs/PRD.md)
+- [Architecture and deployment diagrams](docs/architecture.md)
+- [ADR 0001: Process DeepFilterNet jobs asynchronously](docs/adr/0001-asynchronous-deepfilternet-processing.md)
+- [Editable Excalidraw diagram sources](docs/diagrams/)
+- [Editable multi-page draw.io source](docs/diagrams/audio-noise-reduction-api.drawio)
+
+## Configuration
+
+| Variable | Default | Purpose |
+|---|---:|---|
+| `NOISE_REDUCTION_MAX_UPLOAD_KB` | `102400` | Upload limit in KB |
+| `NOISE_REDUCTION_PROCESS_TIMEOUT` | `600` | Timeout for each external process |
+| `NOISE_REDUCTION_STATUS_TTL` | `86400` | Job-status retention in seconds |
+| `FFMPEG_BINARY` | `ffmpeg` | FFmpeg executable |
+| `DEEPFILTER_BINARY` | `deepFilter` | DeepFilterNet CLI executable |
+| `DEEPFILTER_MODEL` | `DeepFilterNet3` | Pretrained model name or directory |
+
+The database queue retry window is set above the worker timeout to prevent the same long-running job from being processed twice.
+
+## Limitations
+
+- DeepFilterNet3 enhances speech; it is not intended for music restoration or general source separation.
+- CPU inference and video transcoding can be slow for long uploads.
+- Job state is stored in cache rather than a dedicated persistent job-resource table.
+- Processed and uploaded files are not yet deleted automatically.
+- This repository integrates a pretrained model and does not claim to reproduce its published training metrics.
+
+## Next improvements
+
+1. Store jobs in a dedicated database table with ownership and retention metadata.
+2. Delete expired source and output files through a scheduled command.
+3. Add a small evaluation set with objective speech-quality and latency measurements.
+4. Add object storage and signed download URLs.
+5. Export queue depth, processing duration, failure rate, and fallback rate as monitoring metrics.
+
+## Important files
 
 | File | Purpose |
 |---|---|
-| `app/Http/Controllers/UploadController.php` | Upload and status endpoints |
-| `app/Jobs/ProcessDolbyUploadJob.php` | Background job running DeepFilterNet3 |
-| `docker/8.5/Dockerfile` | Container with all AI dependencies baked in |
-| `compose.yaml` | Docker Compose configuration |
+| `app/Http/Controllers/UploadController.php` | Upload and status API |
+| `app/Jobs/ProcessNoiseReductionJob.php` | Queue lifecycle and fallback |
+| `app/Services/AudioNoiseReducer.php` | FFmpeg and DeepFilterNet pipeline |
+| `config/noise_reduction.php` | Pipeline configuration |
+| `compose.yaml` | API, worker, and database services |
+| `.github/workflows/tests.yml` | Continuous integration |
+| `docs/PRD.md` | Product goals, requirements, metrics, and release criteria |
+| `docs/architecture.md` | System, pipeline, deployment, and lifecycle diagrams |
+| `docs/diagrams/*.excalidraw` | Canonical editable source for each architecture diagram |
+| `docs/diagrams/*.png` | GitHub preview exported from the matching Excalidraw source at 2× scale |
+| `docs/diagrams/audio-noise-reduction-api.drawio` | Original multi-page draw.io alternative |
